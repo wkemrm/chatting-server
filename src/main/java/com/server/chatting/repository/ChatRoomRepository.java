@@ -1,34 +1,71 @@
 package com.server.chatting.repository;
 
 import com.server.chatting.dto.ChatRoom;
+import com.server.chatting.service.RedisSubscriber;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.redis.core.HashOperations;
+import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.listener.ChannelTopic;
+import org.springframework.data.redis.listener.RedisMessageListenerContainer;
 import org.springframework.stereotype.Repository;
 
 import javax.annotation.PostConstruct;
 import java.util.*;
-
+@Slf4j
+@RequiredArgsConstructor
 @Repository
 public class ChatRoomRepository {
+    // 채팅방(topic)에 발행되는 메시지를 처리할 Listner
+    private final RedisMessageListenerContainer redisMessageListener;
+    // 구독 처리 서비스
+    private final RedisSubscriber redisSubscriber;
+    // Redis
+    private static final String CHAT_ROOMS = "CHAT_ROOM";
+    private final RedisTemplate<String, Object> redisTemplate;
+    private HashOperations<String, String, ChatRoom> opsHashChatRoom;
 
-    private Map<String, ChatRoom> chatRoomMap;
+    private Map<String, ChannelTopic> topics;
 
     @PostConstruct
-    public void init() {
-        chatRoomMap = new LinkedHashMap<>();
+    private void init() {
+        opsHashChatRoom = redisTemplate.opsForHash();
+        topics = new HashMap<>();
     }
 
     public List<ChatRoom> findAllRoom() {
-        List<ChatRoom> chatRooms = new ArrayList<>(chatRoomMap.values());
-        Collections.reverse(chatRooms);
-        return chatRooms;
+        return opsHashChatRoom.values(CHAT_ROOMS);
     }
 
     public ChatRoom findRoomById(String id) {
-        return chatRoomMap.get(id);
+        return opsHashChatRoom.get(CHAT_ROOMS, id);
     }
 
+    /**
+     * 채팅방 생성 : 서버간 채팅방 공유를 위해 redis hash에 저장한다.
+     */
     public ChatRoom createChatRoom(String name) {
+        log.info("createChatRoom");
         ChatRoom chatRoom = ChatRoom.create(name);
-        chatRoomMap.put(chatRoom.getRoomId(), chatRoom);
+        opsHashChatRoom.put(CHAT_ROOMS,chatRoom.getRoomId(), chatRoom);
         return chatRoom;
+    }
+
+    /**
+     * 채팅방 입장 : redis에 topic을 만들고 pub/sub 통신을 하기 위해 리스너를 설정한다.
+     */
+    public void enterChatRoom(String roomId) {
+        log.info("enterChatRoom");
+        ChannelTopic topic = topics.get(roomId);
+        if (topic == null) {
+            log.info("enterChatRoom -- in if");
+            topic = new ChannelTopic(roomId);
+            redisMessageListener.addMessageListener(redisSubscriber, topic);
+            topics.put(roomId, topic);
+        }
+    }
+
+    public ChannelTopic getTopic(String roomId) {
+        return topics.get(roomId);
     }
 }
